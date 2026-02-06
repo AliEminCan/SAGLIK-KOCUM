@@ -21,7 +21,6 @@ with st.sidebar:
     st.markdown("**⚠️ Önemli Uyarı:**")
     st.info("Buradaki bilgiler tavsiye niteliğindedir. Kesin tanı ve tedavi için mutlaka doktorunuza başvurun.")
     st.divider()
-    # Şifreyi buradan alıyoruz
     api_key = st.text_input("OpenAI API Anahtarını Gir:", type="password")
 
 if not api_key:
@@ -72,6 +71,10 @@ audio_value = st.audio_input("Mikrofonuna bas ve konuş")
 prompt = None
 
 if audio_value:
+    # --- İŞTE O HATAYI ÇÖZEN SİHİRLİ SATIR BURASI ---
+    audio_value.name = "ses_kaydi.wav" 
+    # -----------------------------------------------
+
     with st.spinner("Sesiniz yazıya çevriliyor..."):
         transcription = client.audio.transcriptions.create(
             model="whisper-1", 
