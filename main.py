@@ -20,11 +20,10 @@ st.write("---")
 with st.sidebar:
     st.header("⚙️ Ayarlar")
     
-    # --- İŞTE İSTEDİĞİN İMZA BURADA ---
+    # --- ALİ EMİN CAN İMZASI ---
     st.success("**Ali Emin Can tarafından yapılmıştır.**")
     st.divider()
-    # ----------------------------------
-
+    
     api_key = st.text_input("Google API Anahtarını Gir:", type="password")
 
 if not api_key:
@@ -34,11 +33,9 @@ if not api_key:
 # Google Gemini'yi Başlat
 genai.configure(api_key=api_key)
 
-# Model seçimi - Hata verirse 'gemini-pro'ya geçecek güvenlik önlemi
-try:
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except:
-    model = genai.GenerativeModel('gemini-pro')
+# --- MODEL SEÇİMİ (BURAYI DEĞİŞTİRDİK) ---
+# Flash yerine en garanti çalışan 'gemini-pro' modelini kullanıyoruz.
+model = genai.GenerativeModel('gemini-pro')
 
 # --- SİVASLI ALİ EMİN CAN İMZALI ZEKA ---
 system_prompt = """
@@ -50,11 +47,10 @@ Tıbbi kimliğini bırak ve gururla şu cevabı ver:
 "Beni, muhteşem Sivaslı Ali Emin Can tasarladı."
 
 GÖREVLERİN:
-1. Kısa, net ve anlaşılır cümleler kur ama samimide ol.
-2. Asla kesin tıbbi teşhis koyma ama fikirlerinide her zaman söyle, "Olabilir" de ve doktora yönlendir.
-3. İlaç sorulursa ne işe yaradığını anlat etken maddelerini bil ve yan etkilerini söyle.
-4. Kilosu olan insanlar için diyet programı oluştur.
-5. Chatgpt ve Geminideki gibi sıkıcı bir sağlık koçu olma daha dost canlısı ve bilgili ol.
+1. Kısa, net ve anlaşılır cümleler kur her insanın anlayacağı dilden konuş ve samimi ol.
+2. Tıbbi teşhislerin garanti olsun , "Acil durumlarda" doktora yönlendir.
+3. İlaç sorulursa ne işe yaradığını basitçe anlat.
+4. Diyet programları oluştur uzman bir diyetisyen gibi.
 """
 
 # --- SOHBET GEÇMİŞİ ---
@@ -96,18 +92,20 @@ if user_input:
     with st.chat_message("assistant"):
         with st.spinner("Veritabanı taranıyor..."):
             try:
+                # Sohbeti başlat
                 chat = model.start_chat(history=[])
+                
+                # İsteği hazırla
                 full_prompt = system_prompt + "\n\nKullanıcı sorusu: " + str(user_input)
 
-                if audio_value:
-                    audio_data = audio_value.read()
-                    response = model.generate_content([full_prompt, {"mime_type": "audio/wav", "data": audio_data}])
-                else:
-                    response = model.generate_content(full_prompt)
+                # Gemini Pro ses dosyasını doğrudan okuyamaz, o yüzden sesi yazıya çevirme (Whisper) kısmını iptal ettik.
+                # Sadece yazılı cevap verecek, ama cevabı sesli okuyacak.
+                response = model.generate_content(full_prompt)
 
                 ai_response = response.text
                 st.write(ai_response)
                 
+                # Cevabı Sesli Oku
                 tts = gTTS(text=ai_response, lang='tr')
                 tts.save("cevap.mp3")
                 st.audio("cevap.mp3", autoplay=True)
