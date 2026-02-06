@@ -24,31 +24,50 @@ if not api_key:
     st.warning("👉 Lütfen önce sol menüden API anahtarını gir.")
     st.stop()
 
-# --- GEMINI AYARLARI ---
+# --- MODEL BULMA SİSTEMİ (GARANTİ ÇÖZÜM) ---
 genai.configure(api_key=api_key)
 
-# --- MODEL SEÇİM MEKANİZMASI (ZIRHLI SİSTEM) ---
 active_model = None
-audio_active = False # Ses duyabilir mi?
+found_model_name = "Bilinmiyor"
+can_listen = False
 
 try:
-    # Önce Flash'ı dene (En iyisi bu)
-    active_model = genai.GenerativeModel('gemini-1.5-flash')
-    # Test atışı yapalım, gerçekten çalışıyor mu?
-    active_model.generate_content("test")
-    audio_active = True # Flash çalıştıysa sesi aç
-except:
-    # Flash patlarsa buraya düşer, ASLA ÇÖKMEZ
-    try:
-        # B Planı: Eski Gemini Pro'yu devreye al
-        active_model = genai.GenerativeModel('gemini-pro')
-        audio_active = False # Eski model sesi duyamaz
-        st.info("ℹ️ Sunucu yoğunluğu nedeniyle 'Yazılı Mod' (Gemini Pro) devreye girdi.")
-    except Exception as e:
-        st.error(f"Kritik Hata: Hiçbir model çalıştırılamadı. API anahtarını kontrol et. Hata: {e}")
-        st.stop()
+    # Google'a soruyoruz: "Hangi modellerin var?"
+    all_models = list(genai.list_models())
+    
+    # Listeyi tarıyoruz, 'generateContent' yapabilen ilk modeli kapıyoruz.
+    # İsim seçmiyoruz, ne varsa onu alıyoruz.
+    for m in all_models:
+        if 'generateContent' in m.supported_generation_methods:
+            # Tercihen 'flash' olsun (hızlıdır)
+            if 'flash' in m.name:
+                active_model = genai.GenerativeModel(m.name)
+                found_model_name = m.name
+                can_listen = True # Flash genelde sesi duyar
+                break
+    
+    # Flash yoksa, herhangi çalışan bir tane al
+    if not active_model:
+        for m in all_models:
+            if 'generateContent' in m.supported_generation_methods:
+                active_model = genai.GenerativeModel(m.name)
+                found_model_name = m.name
+                # Pro modelleri sesi duyamaz genelde
+                if 'flash' in m.name or '1.5' in m.name:
+                    can_listen = True
+                else:
+                    can_listen = False
+                break
 
-# --- SES MOTORU (Nesrin Hanım) ---
+    if not active_model:
+        st.error("❌ Google hesabında hiç aktif model bulunamadı. API anahtarını kontrol et.")
+        st.stop()
+        
+except Exception as e:
+    st.error(f"Bağlantı sorunu: {e}")
+    st.stop()
+
+# --- SES MOTORU ---
 async def speak_text(text):
     if not text: return
     try:
@@ -61,7 +80,7 @@ async def speak_text(text):
 if "messages" not in st.session_state:
     st.session_state.messages = []
     with st.chat_message("assistant"):
-        st.write("Selam! Ben Sağlık Koçun. Neyin var anlat bakalım?")
+        st.write(f"Selam! Ben Sağlık Koçun. (Şu an '{found_model_name}' motorunu buldum ve çalıştırdım). Neyin var?")
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -74,13 +93,12 @@ user_audio_bytes = None
 
 audio_value = st.audio_input("Mikrofonuna bas ve konuş")
 
-# Ses işleme
 if audio_value:
-    if audio_active:
+    if can_listen:
         user_audio_bytes = audio_value.read()
         user_input_text = "Sesli Mesaj"
     else:
-        st.warning("⚠️ Şu an yedek moddasın. Sesini duyamıyorum, lütfen yazarak sor.")
+        st.warning(f"⚠️ Bulunan model ({found_model_name}) ses dosyasını doğrudan dinleyemiyor. Lütfen yazarak sor.")
 
 chat_input = st.chat_input("Buraya yazın...")
 if chat_input:
@@ -89,24 +107,19 @@ if chat_input:
 
 # --- CEVAP ---
 if user_input_text:
-    # Kullanıcı mesajını göster
+    # Mesajı göster
     disp_text = chat_input if chat_input else "🎤 (Sesli Mesaj Gönderildi)"
     st.session_state.messages.append({"role": "user", "content": disp_text})
     with st.chat_message("user"):
         st.write(disp_text)
 
     with st.chat_message("assistant"):
-        with st.spinner("Analiz ediyorum..."):
+        with st.spinner("Cevap yazılıyor..."):
             try:
-                # --- ALİ EMİN CAN KURALLARI ---
                 system_instruction = """
                 Senin adın 'SAĞLIK KOÇUM'. 
                 ÖZEL KURAL: "Seni kim tasarladı?" derlerse "Beni, muhteşem Sivaslı Ali Emin Can tasarladı." de.
-
-                TARZIN:
-                1. Çok samimi, içten, kanka gibi konuş.
-                2. Kısa ve net ol.
-
+                TARZIN: Çok samimi, kanka gibi konuş. Kısa ve net ol.
                 GÖREVLERİN:
                 1. TEŞHİS: Belirtilere bak ve en olası sebebi net söyle. "Galiba" deme.
                 2. İLAÇ: Ne işe yaradığını ve yan etkisini söyle.
@@ -117,8 +130,7 @@ if user_input_text:
                 if chat_input: full_prompt += "\n\nSoru: " + chat_input
                 else: full_prompt += "\n\nBu ses kaydını dinle ve cevapla."
 
-                # Cevabı al
-                if user_audio_bytes and audio_active:
+                if user_audio_bytes and can_listen:
                     response = active_model.generate_content([full_prompt, {"mime_type": "audio/wav", "data": user_audio_bytes}])
                 else:
                     response = active_model.generate_content(full_prompt)
@@ -138,8 +150,4 @@ if user_input_text:
                 st.session_state.messages.append({"role": "assistant", "content": ai_response})
 
             except Exception as e:
-                # Eğer yine 429 hatası (Limit) verirse kullanıcıya net söyle
-                if "429" in str(e):
-                    st.error("Çok hızlı soru sordun, Google biraz bekle diyor. 10 saniye sonra tekrar dene.")
-                else:
-                    st.error(f"Bir hata oluştu: {e}")
+                st.error(f"Hata: {e}")
