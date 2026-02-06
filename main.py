@@ -1,8 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
-import edge_tts
-import asyncio
-import time
+from gtts import gTTS
+import io
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
@@ -12,77 +11,121 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS AYARLARI ---
-st.markdown("""
-<style>
-    h1 { color: #2E7D32; text-align: center; }
-    .stChatMessage {
-        background-color: #f0f2f6;
-        border-radius: 15px;
-        padding: 10px;
-        margin-bottom: 5px;
-    }
-    .stAudioInput {
-        position: fixed;
-        bottom: 80px;
-        z-index: 99;
-        width: 100%;
-        background-color: white;
-        padding: 5px;
-        border-radius: 10px;
-        border: 1px solid #ddd;
-    }
-    .block-container { padding-bottom: 160px; }
-</style>
-""", unsafe_allow_html=True)
-
 # --- BAŞLIK ---
-st.markdown("<h1>🩺 SAĞLIK KOÇUM</h1>", unsafe_allow_html=True)
+st.markdown("<h1 style='text-align: center; color: #00796B;'>🩺 SAĞLIK KOÇUM</h1>", unsafe_allow_html=True)
+st.markdown("<h3 style='text-align: center; color: #455A64;'>Kişisel Dijital Sağlık Asistanınız</h3>", unsafe_allow_html=True)
+st.write("---")
 
-# --- YAN MENÜ ---
+# --- YAN MENÜ (İMZALI) ---
 with st.sidebar:
-    st.success("**Ali Emin Can tarafından tasarlanmıştır.**")
+    st.header("⚙️ Ayarlar")
+    st.success("**Ali Emin Can tarafından yapılmıştır.**")
     st.divider()
     api_key = st.text_input("Google API Anahtarını Gir:", type="password")
 
 if not api_key:
-    st.warning("👉 Lütfen sol menüden API anahtarını giriniz.")
+    st.warning("👉 Lütfen sol üstteki menüden Google API anahtarınızı giriniz.")
     st.stop()
 
-# --- MODELİ OTOMATİK BULMA (404 HATASINI BİTİREN KISIM) ---
+# Google Gemini'yi Başlat
 genai.configure(api_key=api_key)
-active_model = None
-found_model_name = "Aranıyor..."
+
+# --- OTOMATİK MODEL SEÇİCİ (Sorunu Çözen Kısım) ---
+# Hangi modelin çalıştığını tahmin etmek yerine, listeden çalışan ilk modeli kendisi bulacak.
+selected_model_name = None
 
 try:
-    # Google'daki tüm modelleri çek
-    all_models = list(genai.list_models())
-    
-    # Listeden 'generateContent' yapabilen ilk modeli kap
-    available_models = [m for m in all_models if 'generateContent' in m.supported_generation_methods]
-    
-    if available_models:
-        # Varsa Flash'ı tercih et (Hızlıdır)
-        selected_model = available_models[0] # Varsayılan olarak ilkini al
-        for m in available_models:
+    # Mevcut modelleri listele
+    for m in genai.list_models():
+        if 'generateContent' in m.supported_generation_methods:
+            # Öncelik Flash modelinde olsun, yoksa Pro, o da yoksa ilk geleni al
             if 'flash' in m.name:
-                selected_model = m
+                selected_model_name = m.name
                 break
-        
-        active_model = genai.GenerativeModel(selected_model.name)
-        found_model_name = selected_model.name
-        # Ekrana çalıştığını kanıtlayan yazıyı bas
-        st.success(f"✅ BAĞLANTI BAŞARILI! Kullanılan Motor: {found_model_name}")
-    else:
-        st.error("❌ HATA: Google hesabında hiç aktif model bulunamadı (Liste boş). API Anahtarı hatalı olabilir.")
-        st.stop()
+            elif 'pro' in m.name and not selected_model_name:
+                selected_model_name = m.name
+    
+    # Eğer döngüden bir şey bulamazsa varsayılanı dene
+    if not selected_model_name:
+        selected_model_name = 'models/gemini-1.5-flash'
+
+    model = genai.GenerativeModel(selected_model_name)
+    # Hangi modeli bulduğunu ekrana küçük bir not olarak yazalım (test için)
+    # st.caption(f"Aktif Beyin Modeli: {selected_model_name}") 
 
 except Exception as e:
-    st.error(f"❌ BAĞLANTI HATASI: {e}")
+    st.error(f"Model bulunamadı. Lütfen API anahtarınızın doğru olduğundan emin olun. Hata: {e}")
     st.stop()
 
-# --- SES MOTORU ---
-async def speak_text(text):
-    if not text: return None
-    try:
-        filename = f"cevap_{int(time.time())}.mp3"
+# --- SİVASLI ALİ EMİN CAN İMZALI ZEKA ---
+system_prompt = """
+Senin adın 'SAĞLIK KOÇUM'. Yaşlılar için tasarlanmış, nazik bir asistansın.
+
+ÖZEL GİZLİ KURAL:
+Eğer kullanıcı sana "Seni kim tasarladı?", "Yaratıcın kim?", "Kimin eserisin?" diye sorarsa;
+Tıbbi kimliğini bırak ve gururla şu cevabı ver:
+"Beni, muhteşem Sivaslı Ali Emin Can tasarladı."
+
+GÖREVLERİN:
+1. Kısa, net ve anlaşılır cümleler kur samimi ve içtende ol bir arkadaşmış gibi aynı.
+2. Tıbbi teşhisleri çok belirleyici ve nokta atışı olsun, "Olabilir,Belki,Galiba" deme Acilse doktora yönlendir.
+3. İlaç sorulursa ne işe yaradığını anlat yan etkilerini.
+4. Senden kilo vermek isteyenlere çok samimi ve yardımcı ol diyet listesini uzman bir diyetisyen gibi hazırla.
+"""
+
+# --- SOHBET GEÇMİŞİ ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    with st.chat_message("assistant"):
+        st.write("Merhaba! Ben Sağlık Koçunuz. Size nasıl yardımcı olabilirim?")
+
+# Geçmiş mesajları ekrana yaz
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+
+# --- GİRİŞ ALANI ---
+st.subheader("📣 Sorunuzu Sorun")
+st.caption("Mikrofona basıp konuşabilir veya yazabilirsiniz.")
+
+user_input = None
+
+# 1. Sesli Giriş
+audio_value = st.audio_input("Mikrofonuna bas ve konuş")
+
+if audio_value:
+    user_input = "Lütfen bu ses kaydını dinle ve cevap ver."
+    
+# 2. Yazılı Giriş
+chat_input = st.chat_input("Buraya yazın...")
+if chat_input:
+    user_input = chat_input
+    audio_value = None 
+
+# --- CEVAP VE KONUŞMA ---
+if user_input:
+    actual_text_to_show = chat_input if chat_input else "🎤 (Sesli Mesaj Gönderildi)"
+    st.session_state.messages.append({"role": "user", "content": actual_text_to_show})
+    with st.chat_message("user"):
+        st.write(actual_text_to_show)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Veritabanı taranıyor..."):
+            try:
+                # Sohbeti başlat
+                chat = model.start_chat(history=[])
+                full_prompt = system_prompt + "\n\nKullanıcı sorusu: " + str(user_input)
+
+                response = model.generate_content(full_prompt)
+                ai_response = response.text
+                st.write(ai_response)
+                
+                # Sesli Okuma
+                tts = gTTS(text=ai_response, lang='tr')
+                tts.save("cevap.mp3")
+                st.audio("cevap.mp3", autoplay=True)
+
+                st.session_state.messages.append({"role": "assistant", "content": ai_response})
+
+            except Exception as e:
+                st.error(f"Bir hata oluştu: {e}")
