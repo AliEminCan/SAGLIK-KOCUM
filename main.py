@@ -11,11 +11,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- BAŞLIK VE İMZA ---
+# --- BAŞLIK ---
 st.markdown("<h1 style='text-align: center; color: #00796B;'>🩺 SAĞLIK KOÇUM</h1>", unsafe_allow_html=True)
 st.markdown("<h3 style='text-align: center; color: #455A64;'>Kişisel Dijital Sağlık Asistanınız</h3>", unsafe_allow_html=True)
 st.write("---")
 
+# --- YAN MENÜ ---
 with st.sidebar:
     st.header("⚙️ Ayarlar")
     st.success("**Ali Emin Can tarafından yapılmıştır.**")
@@ -26,34 +27,19 @@ if not api_key:
     st.warning("👉 Lütfen sol üstteki menüden Google API anahtarınızı giriniz.")
     st.stop()
 
-# --- MODELİ OTOMATİK BULAN SİSTEM (HATAYI BİTİREN KISIM) ---
+# --- GEMINI AYARLARI ---
 genai.configure(api_key=api_key)
 
-active_model = None
+# Sesli görüşme için Flash modelini zorluyoruz (Çünkü sadece o sesi duyabilir)
 try:
-    # Google'a soruyoruz: Elinde hangi modeller var?
-    for m in genai.list_models():
-        if 'generateContent' in m.supported_generation_methods:
-            # Flash veya Pro modelini öncelikli ara
-            if 'flash' in m.name:
-                active_model = genai.GenerativeModel(m.name)
-                # st.toast(f"Model Bulundu: {m.name}") # Test için
-                break
-    
-    # Eğer Flash bulamazsan eline gelen ilk modeli seç
-    if not active_model:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                active_model = genai.GenerativeModel(m.name)
-                break
-
-except Exception as e:
-    st.error(f"Bağlantı hatası: {e}")
+    model = genai.GenerativeModel('gemini-1.5-flash')
+except:
+    st.error("Google'ın yeni modellerine erişilemiyor. Lütfen API anahtarını kontrol et.")
     st.stop()
-# -----------------------------------------------------------
 
-# --- KALİTELİ SES FONKSİYONU (Nesrin Hanım) ---
+# --- SES FONKSİYONU (Nesrin Hanım) ---
 async def speak_text(text):
+    if not text: return # Boş metin gelirse konuşma
     communicate = edge_tts.Communicate(text, "tr-TR-NesrinNeural")
     await communicate.save("cevap.mp3")
 
@@ -77,41 +63,66 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
-# --- GİRİŞLER ---
+# --- GİRİŞ ALANI ---
 st.caption("Mikrofona basıp konuşabilir veya yazabilirsiniz.")
-user_input = None
-audio_value = st.audio_input("Mikrofonuna bas ve konuş")
+user_input_text = None
+user_audio_bytes = None
 
+# 1. Sesli Giriş
+audio_value = st.audio_input("Mikrofonuna bas ve konuş")
 if audio_value:
-    user_input = "Lütfen bu ses kaydını dinle ve cevap ver."
-    
+    user_audio_bytes = audio_value.read() # Sesi erkenden oku
+    if len(user_audio_bytes) > 0:
+        user_input_text = "Sesli Mesaj"
+    else:
+        st.warning("Ses algılanamadı, lütfen tekrar deneyin.")
+
+# 2. Yazılı Giriş
 chat_input = st.chat_input("Buraya yazın...")
 if chat_input:
-    user_input = chat_input
-    audio_value = None 
+    user_input_text = chat_input
+    user_audio_bytes = None # Yazı varsa sesi iptal et
 
-# --- CEVAP VE SES ---
-if user_input:
-    st.session_state.messages.append({"role": "user", "content": user_input})
+# --- İŞLEM VE CEVAP ---
+if user_input_text:
+    # Mesajı ekrana bas
+    display_text = chat_input if chat_input else "🎤 (Sesli Mesaj Gönderildi)"
+    st.session_state.messages.append({"role": "user", "content": display_text})
     with st.chat_message("user"):
-        st.write(user_input)
+        st.write(display_text)
 
     with st.chat_message("assistant"):
         with st.spinner("Düşünüyorum..."):
             try:
-                chat = active_model.start_chat(history=[])
-                full_prompt = system_prompt + "\n\nSoru: " + str(user_input)
+                # Sohbeti başlat
+                chat = model.start_chat(history=[])
                 
-                response = active_model.generate_content(full_prompt)
+                # Soru metni
+                prompt_content = system_prompt
+                if chat_input:
+                     prompt_content += "\n\nSoru: " + chat_input
+                else:
+                     prompt_content += "\n\nLütfen gönderdiğim ses kaydını dinle ve cevap ver."
+
+                # İsteği Gönder (Sesli veya Yazılı)
+                if user_audio_bytes:
+                    response = model.generate_content([
+                        prompt_content,
+                        {"mime_type": "audio/wav", "data": user_audio_bytes}
+                    ])
+                else:
+                    response = model.generate_content(prompt_content)
+                
                 ai_response = response.text
                 st.write(ai_response)
                 
-                # Sesi Oluştur ve Çal
+                # Sesi Oku
                 try:
                     loop = asyncio.get_event_loop()
                 except RuntimeError:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
+                
                 loop.run_until_complete(speak_text(ai_response))
                 st.audio("cevap.mp3", autoplay=True)
 
