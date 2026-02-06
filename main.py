@@ -21,29 +21,51 @@ with st.sidebar:
     api_key = st.text_input("Google API Anahtarını Gir:", type="password")
 
 if not api_key:
-    st.warning("👉 Lütfen API anahtarını gir.")
+    st.warning("👉 Lütfen önce sol menüden API anahtarını gir.")
     st.stop()
 
-# --- GEMINI AYARLARI (AKILLI SEÇİM) ---
+# --- GEMINI MODELİNİ OTOMATİK BULAN RADAR ---
 genai.configure(api_key=api_key)
 
-# Önce en yeni modeli (Flash) deniyoruz, olmazsa eskiye (Pro) düşüyoruz.
 active_model = None
-can_hear_audio = False 
+model_name_log = ""
 
 try:
-    # 1. Deneme: Flash Modeli (Kulağı var, duyar)
-    active_model = genai.GenerativeModel('gemini-1.5-flash')
-    # Test edelim
-    active_model.generate_content("test") 
-    can_hear_audio = True
-except:
-    # 2. Deneme: Hata verirse Eski Pro Modeline geç
-    active_model = genai.GenerativeModel('gemini-pro')
-    can_hear_audio = False
-    st.error("⚠️ Sistem eski sürümde çalışıyor (Sadece yazı yazabilirsin).")
+    # Google'daki tüm modelleri listele
+    all_models = list(genai.list_models())
+    
+    # 1. Öncelik: Gemini 1.5 Flash (En Hızlısı)
+    for m in all_models:
+        if 'gemini-1.5-flash' in m.name and 'generateContent' in m.supported_generation_methods:
+            active_model = genai.GenerativeModel(m.name)
+            model_name_log = m.name
+            break
+    
+    # 2. Öncelik: Eğer Flash yoksa Gemini Pro (Eskisi)
+    if not active_model:
+        for m in all_models:
+            if 'gemini-pro' in m.name and 'generateContent' in m.supported_generation_methods:
+                active_model = genai.GenerativeModel(m.name)
+                model_name_log = m.name
+                break
+    
+    # 3. Öncelik: Hiçbiri yoksa çalışan İLK modeli al
+    if not active_model:
+        for m in all_models:
+            if 'generateContent' in m.supported_generation_methods:
+                active_model = genai.GenerativeModel(m.name)
+                model_name_log = m.name
+                break
 
-# --- SES FONKSİYONU ---
+    if not active_model:
+        st.error("❌ Google API anahtarın doğru ama hiç model bulunamadı. Lütfen anahtarını kontrol et.")
+        st.stop()
+
+except Exception as e:
+    st.error(f"❌ Bağlantı hatası! Muhtemelen API anahtarı hatalı veya Google servisi meşgul. Hata detayı: {e}")
+    st.stop()
+
+# --- SES MOTORU (Nesrin Hanım) ---
 async def speak_text(text):
     if not text: return
     try:
@@ -56,24 +78,27 @@ async def speak_text(text):
 if "messages" not in st.session_state:
     st.session_state.messages = []
     with st.chat_message("assistant"):
-        st.write("Selam! Ben Sağlık Koçun. Neyin var anlat bakalım, hemen çözelim.")
+        st.write(f"Selam! Ben Sağlık Koçun. (Şu an {model_name_log.split('/')[-1]} motoruyla çalışıyorum). Neyin var, anlat çözelim.")
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.write(msg["content"])
 
 # --- GİRİŞLER ---
-st.caption("Mikrofona basıp konuşabilir veya yazabilirsiniz.")
+st.caption("Mikrofona bas konuş veya yaz.")
 user_input_text = None
 user_audio_bytes = None
 
 audio_value = st.audio_input("Mikrofonuna bas ve konuş")
+
+# Ses işleme
 if audio_value:
-    if can_hear_audio:
+    # Modeli kontrol et, sesi destekliyor mu? (Sadece 'flash' ve '1.5' modelleri sesi destekler)
+    if "flash" in model_name_log or "1.5" in model_name_log:
         user_audio_bytes = audio_value.read()
         user_input_text = "Sesli Mesaj"
     else:
-        st.warning("❌ Şu anki model sesi duyamıyor, lütfen yazarak sor.")
+        st.warning(f"⚠️ Aktif model ({model_name_log}) sesi doğrudan duyamıyor. Lütfen sorunu yazarak sor.")
 
 chat_input = st.chat_input("Buraya yazın...")
 if chat_input:
@@ -81,36 +106,37 @@ if chat_input:
     user_audio_bytes = None
 
 # --- CEVAP ---
-if user_input_text and (chat_input or (audio_value and can_hear_audio)):
-    # Mesajı göster
-    disp = chat_input if chat_input else "🎤 (Sesli Mesaj)"
-    st.session_state.messages.append({"role": "user", "content": disp})
+if user_input_text:
+    # Kullanıcı mesajını göster
+    disp_text = chat_input if chat_input else "🎤 (Sesli Mesaj Gönderildi)"
+    st.session_state.messages.append({"role": "user", "content": disp_text})
     with st.chat_message("user"):
-        st.write(disp)
+        st.write(disp_text)
 
     with st.chat_message("assistant"):
-        with st.spinner("İnceliyorum..."):
+        with st.spinner("Analiz ediyorum..."):
             try:
-                # --- İŞTE SENİN İSTEDİĞİN ÖZEL GÖREVLER ---
+                # --- ALİ EMİN CAN PERSONASI ---
                 system_instruction = """
                 Senin adın 'SAĞLIK KOÇUM'. 
-                ÖZEL KURAL: "Seni kim tasarladı?" derlerse gururla "Beni, muhteşem Sivaslı Ali Emin Can tasarladı." de.
+                ÖZEL KURAL: "Seni kim tasarladı?" derlerse GURURLA "Beni, muhteşem Sivaslı Ali Emin Can tasarladı." de.
 
-                KİMLİK VE TON:
-                1. Çok samimi, içten ve cana yakın bir arkadaş gibi konuş. Resmiyet yok.
-                2. Kısa, net ve anlaşılır cümleler kur.
+                TARZIN:
+                1. Çok samimi, içten, kanka gibi konuş. Resmiyet yok.
+                2. Kısa ve net ol.
 
                 GÖREVLERİN:
-                1. TEŞHİS: Kullanıcı şikayetini söylediğinde, analizlerin çok net ve nokta atışı olsun. "Belki, galiba" gibi kaçamak laflar etme. Kendinden emin konuş. (Ama durum çok acil ve hayatiyse hemen doktora git de).
-                2. İLAÇLAR: İlaç sorulursa ne işe yaradığını ve yan etkilerini net bir şekilde anlat.
-                3. DİYET: Kilo vermek isteyenlere çok samimi davran, motive et. Onlara uzman bir diyetisyen gibi profesyonel ama uygulanabilir diyet listeleri hazırla.
+                1. TEŞHİS: "Galiba, olabilir" deme. Belirtilere bak ve en olası sebebi net söyle. (Çok acilse doktora kovla).
+                2. İLAÇ: Ne işe yaradığını ve yan etkisini tak tak söyle.
+                3. DİYET: Kilo vermek isteyene samimi davran, gaz ver. Diyetisyen gibi profesyonel liste yap.
                 """
                 
                 full_prompt = system_instruction
                 if chat_input: full_prompt += "\n\nSoru: " + chat_input
                 else: full_prompt += "\n\nBu ses kaydını dinle ve cevapla."
 
-                if user_audio_bytes and can_hear_audio:
+                # Cevabı al
+                if user_audio_bytes:
                     response = active_model.generate_content([full_prompt, {"mime_type": "audio/wav", "data": user_audio_bytes}])
                 else:
                     response = active_model.generate_content(full_prompt)
@@ -130,4 +156,4 @@ if user_input_text and (chat_input or (audio_value and can_hear_audio)):
                 st.session_state.messages.append({"role": "assistant", "content": ai_response})
 
             except Exception as e:
-                st.error(f"Beklenmedik bir hata: {e}")
+                st.error(f"Hata oluştu: {e}")
