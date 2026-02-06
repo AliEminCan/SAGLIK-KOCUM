@@ -1,5 +1,6 @@
 import streamlit as st
 from openai import OpenAI
+import io # Bu yeni kütüphane ses dosyasını tamir edecek
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(
@@ -64,21 +65,24 @@ st.write("---")
 
 # --- GİRİŞ ALANI ---
 st.subheader("📣 Sorunuzu Sorun")
-st.caption("Mikrofon düğmesine basıp konuşabilir veya alttaki kutuya yazabilirsiniz.")
+st.caption("Konuşmanız bitince durdur butonuna basmayı unutmayın.")
 
 # 1. Sesli Giriş
 audio_value = st.audio_input("Mikrofonuna bas ve konuş")
 prompt = None
 
 if audio_value:
-    # --- İŞTE O HATAYI ÇÖZEN SİHİRLİ SATIR BURASI ---
-    audio_value.name = "ses_kaydi.wav" 
-    # -----------------------------------------------
+    # --- HATAYI ÖNLEYEN YENİ GÜVENLİK KİLİDİ ---
+    # Sesi okuyup ismini zorla 'ses.wav' yapıyoruz ki sistem tanıyamamazlık yapmasın
+    audio_bytes = audio_value.read()
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = "ses.wav" 
+    # ------------------------------------------
 
     with st.spinner("Sesiniz yazıya çevriliyor..."):
         transcription = client.audio.transcriptions.create(
             model="whisper-1", 
-            file=audio_value
+            file=audio_file # Artık düzeltilmiş dosyayı gönderiyoruz
         )
         prompt = transcription.text
 
