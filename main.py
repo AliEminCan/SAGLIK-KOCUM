@@ -12,7 +12,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS: BALONCUKLAR VE DÜZEN ---
+# --- CSS AYARLARI ---
 st.markdown("""
 <style>
     h1 { color: #2E7D32; text-align: center; }
@@ -49,119 +49,40 @@ if not api_key:
     st.warning("👉 Lütfen sol menüden API anahtarını giriniz.")
     st.stop()
 
-# --- MODEL AYARLARI ---
+# --- MODELİ OTOMATİK BULMA (404 HATASINI BİTİREN KISIM) ---
 genai.configure(api_key=api_key)
 active_model = None
+found_model_name = "Aranıyor..."
 
 try:
-    active_model = genai.GenerativeModel('gemini-1.5-flash')
-except:
-    active_model = genai.GenerativeModel('gemini-pro')
+    # Google'daki tüm modelleri çek
+    all_models = list(genai.list_models())
+    
+    # Listeden 'generateContent' yapabilen ilk modeli kap
+    available_models = [m for m in all_models if 'generateContent' in m.supported_generation_methods]
+    
+    if available_models:
+        # Varsa Flash'ı tercih et (Hızlıdır)
+        selected_model = available_models[0] # Varsayılan olarak ilkini al
+        for m in available_models:
+            if 'flash' in m.name:
+                selected_model = m
+                break
+        
+        active_model = genai.GenerativeModel(selected_model.name)
+        found_model_name = selected_model.name
+        # Ekrana çalıştığını kanıtlayan yazıyı bas
+        st.success(f"✅ BAĞLANTI BAŞARILI! Kullanılan Motor: {found_model_name}")
+    else:
+        st.error("❌ HATA: Google hesabında hiç aktif model bulunamadı (Liste boş). API Anahtarı hatalı olabilir.")
+        st.stop()
+
+except Exception as e:
+    st.error(f"❌ BAĞLANTI HATASI: {e}")
+    st.stop()
 
 # --- SES MOTORU ---
 async def speak_text(text):
     if not text: return None
     try:
         filename = f"cevap_{int(time.time())}.mp3"
-        communicate = edge_tts.Communicate(text, "tr-TR-NesrinNeural")
-        await communicate.save(filename)
-        return filename
-    except Exception as e:
-        return f"HATA: {e}"
-
-# --- HAFIZA VE SAYAÇ ---
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-    st.session_state.messages.append({"role": "assistant", "content": "Selam! Ben Sağlık Koçun. Neyin var, anlat bakalım?", "audio": None})
-
-if "audio_counter" not in st.session_state:
-    st.session_state.audio_counter = 0
-
-# --- GEÇMİŞİ GÖSTER ---
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
-        if "audio" in msg and msg["audio"] and "HATA" not in msg["audio"]:
-            st.audio(msg["audio"], format='audio/mp3')
-
-# --- GİRİŞ ALANI ---
-chat_input = st.chat_input("Buraya yazın...")
-audio_value = st.audio_input("🎤 Bas-Konuş", key=f"mic_{st.session_state.audio_counter}")
-
-# Veriyi Yakala
-user_input_text = None
-user_audio_bytes = None
-input_type = None
-
-if chat_input:
-    user_input_text = chat_input
-    input_type = "text"
-elif audio_value:
-    user_audio_bytes = audio_value.read()
-    if len(user_audio_bytes) > 0:
-        user_input_text = "🎤 (Sesli Mesaj)"
-        input_type = "audio"
-
-# --- CEVAP MEKANİZMASI ---
-if user_input_text:
-    st.session_state.messages.append({"role": "user", "content": user_input_text})
-    with st.chat_message("user"):
-        st.write(user_input_text)
-
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        with st.spinner("..."):
-            ai_response = ""
-            audio_file = None
-            
-            # 1. ADIM: YAPAY ZEKA CEVABI (Burada hata varsa göreceğiz)
-            try:
-                system_instruction = """
-                Sen 'SAĞLIK KOÇUM'sun. 
-                GİZLİ KURAL: "Seni kim tasarladı?" derlerse "Beni, muhteşem Sivaslı Ali Emin Can tasarladı." de.
-                TON: Çok samimi, kanka gibi konuş.
-                GÖREVLER:
-                1. TEŞHİS: Net konuş. "Galiba" deme.
-                2. İLAÇ: Ne işe yarar, yan etkisi ne anlat.
-                3. DİYET: Samimi ve profesyonel liste ver.
-                """
-                
-                full_prompt = system_instruction
-                if input_type == "text": 
-                    full_prompt += f"\n\nSoru: {chat_input}"
-                    response = active_model.generate_content(full_prompt)
-                else: 
-                    full_prompt += "\n\nBu ses kaydını dinle ve samimi cevap ver."
-                    response = active_model.generate_content([full_prompt, {"mime_type": "audio/wav", "data": user_audio_bytes}])
-                
-                ai_response = response.text
-                message_placeholder.write(ai_response)
-                
-            except Exception as e:
-                st.error(f"YAPAY ZEKA HATASI: {e}")
-                ai_response = None # Cevap yoksa sesi deneme
-
-            # 2. ADIM: SES OLUŞTURMA (Ses hatası varsa onu da göreceğiz)
-            if ai_response:
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    audio_result = loop.run_until_complete(speak_text(ai_response))
-                    
-                    if audio_result and "HATA" in audio_result:
-                        st.warning(f"Ses oluşturulamadı: {audio_result}")
-                    elif audio_result:
-                        audio_file = audio_result
-                        st.audio(audio_file, format='audio/mp3', autoplay=True)
-
-                    st.session_state.messages.append({"role": "assistant", "content": ai_response, "audio": audio_file})
-                
-                except Exception as e:
-                    st.warning(f"SES SİSTEMİ HATASI: {e}")
-                    st.session_state.messages.append({"role": "assistant", "content": ai_response, "audio": None})
-
-            # 3. ADIM: YENİLEME
-            if input_type == "audio":
-                time.sleep(1)
-                st.session_state.audio_counter += 1
-                st.rerun()
