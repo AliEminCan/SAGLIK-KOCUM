@@ -12,34 +12,28 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- CSS İLE GÖRÜNÜMÜ GÜZELLEŞTİRME ---
+# --- CSS: BALONCUKLAR VE DÜZEN ---
 st.markdown("""
 <style>
-    /* Başlık */
     h1 { color: #2E7D32; text-align: center; }
-    
-    /* Mesaj Baloncukları */
     .stChatMessage {
         background-color: #f0f2f6;
         border-radius: 15px;
         padding: 10px;
         margin-bottom: 5px;
     }
-    
-    /* Mikrofon Alanı Düzenlemesi */
+    /* Mikrofonu sabitle */
     .stAudioInput {
         position: fixed;
-        bottom: 80px; /* Yazı kutusunun hemen üstü */
+        bottom: 80px;
         z-index: 99;
         width: 100%;
         background-color: white;
-        padding: 10px;
+        padding: 5px;
         border-radius: 10px;
-        box-shadow: 0px -2px 10px rgba(0,0,0,0.1);
+        border: 1px solid #ddd;
     }
-    
-    /* Gereksiz boşlukları sil */
-    .block-container { padding-bottom: 150px; }
+    .block-container { padding-bottom: 160px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,14 +47,13 @@ with st.sidebar:
     api_key = st.text_input("Google API Anahtarını Gir:", type="password")
 
 if not api_key:
-    st.warning("👉 Lütfen sol üstteki menüden anahtarınızı giriniz.")
+    st.warning("👉 Lütfen sol menüden API anahtarını giriniz.")
     st.stop()
 
 # --- MODEL AYARLARI ---
 genai.configure(api_key=api_key)
 active_model = None
 
-# Modeli sessizce bul
 try:
     active_model = genai.GenerativeModel('gemini-1.5-flash')
 except:
@@ -70,7 +63,6 @@ except:
 async def speak_text(text):
     if not text: return None
     try:
-        # Benzersiz dosya ismi (Tarayıcı önbelleği sorunu olmasın diye)
         filename = f"cevap_{int(time.time())}.mp3"
         communicate = edge_tts.Communicate(text, "tr-TR-NesrinNeural")
         await communicate.save(filename)
@@ -78,12 +70,12 @@ async def speak_text(text):
     except:
         return None
 
-# --- SOHBET VE SES HAFIZASI ---
+# --- HAFIZA VE SAYAÇ ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
     st.session_state.messages.append({"role": "assistant", "content": "Selam! Ben Sağlık Koçun. Neyin var, anlat bakalım?", "audio": None})
 
-# MİKROFONU SIFIRLAMAK İÇİN SAYAÇ (İŞİN SIRRI BURADA)
+# MİKROFONU SIFIRLAMAK İÇİN SAYAÇ
 if "audio_counter" not in st.session_state:
     st.session_state.audio_counter = 0
 
@@ -94,16 +86,13 @@ for msg in st.session_state.messages:
         if "audio" in msg and msg["audio"]:
             st.audio(msg["audio"], format='audio/mp3')
 
-# --- GİRİŞ ALANI (SINIRSIZ SES İÇİN ÖZEL KURGU) ---
-
-# 1. Yazı Kutusu (En altta sabit)
+# --- GİRİŞ ALANI ---
 chat_input = st.chat_input("Buraya yazın...")
 
-# 2. Mikrofon (Yazının hemen üstünde, her seferinde yenilenen ID ile)
-# key=... kısmı sayesinde her mesajdan sonra mikrofon sıfırlanır.
+# Mikrofon (Sayacı key olarak veriyoruz ki her seferinde sıfırlansın)
 audio_value = st.audio_input("🎤 Bas-Konuş", key=f"mic_{st.session_state.audio_counter}")
 
-# Kullanıcı verisini yakala
+# Veriyi Yakala
 user_input_text = None
 user_audio_bytes = None
 input_type = None
@@ -119,20 +108,24 @@ elif audio_value:
 
 # --- CEVAP MEKANİZMASI ---
 if user_input_text:
-    # Kullanıcı mesajını ekrana bas
+    # 1. Kullanıcı mesajını ekle
     st.session_state.messages.append({"role": "user", "content": user_input_text})
     with st.chat_message("user"):
         st.write(user_input_text)
 
-    # Asistan cevabı
+    # 2. Asistan Cevabı
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         with st.spinner("..."):
+            ai_response = ""
+            audio_file = None
+            
+            # --- TRY BLOGU: HATA YAKALAMA BURADA ---
             try:
                 system_instruction = """
                 Sen 'SAĞLIK KOÇUM'sun. 
-                GİZLİ KURAL: "Seni kim tasarladı?" derlerse GURURLA "Beni, muhteşem Sivaslı Ali Emin Can tasarladı." de.
-                TON: Çok samimi, cana yakın, kanka gibi.
+                GİZLİ KURAL: "Seni kim tasarladı?" derlerse "Beni, muhteşem Sivaslı Ali Emin Can tasarladı." de.
+                TON: Çok samimi, kanka gibi konuş.
                 GÖREVLER:
                 1. TEŞHİS: Net konuş. "Galiba" deme.
                 2. İLAÇ: Ne işe yarar, yan etkisi ne anlat.
@@ -150,20 +143,23 @@ if user_input_text:
                 ai_response = response.text
                 message_placeholder.write(ai_response)
                 
-                # Sesi Hazırla
-                audio_file = None
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                
+                # Sesi oluştur
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
                 audio_file = loop.run_until_complete(speak_text(ai_response))
                 
                 if audio_file:
                     st.audio(audio_file, format='audio/mp3', autoplay=True)
 
+                # Hafızaya kaydet
                 st.session_state.messages.append({"role": "assistant", "content": ai_response, "audio": audio_file})
 
-                # --- KRİTİK NOKTA: MİKROFONU SIFIRLA ---
-                # Sayacı artırıyoruz, böylece Stream
+            except Exception as e:
+                st.error("Bir bağlantı sorunu var, tekrar dener misin?")
+            
+            # --- RERUN (YENİLEME) GÜVENLİ BÖLGE ---
+            # Try-except bittikten sonra burası çalışır. Hata vermez.
+            if input_type == "audio":
+                time.sleep(1) # Sesin gitmesi için minik bir bekleme
+                st.session_state.audio_counter += 1
+                st.rerun()
